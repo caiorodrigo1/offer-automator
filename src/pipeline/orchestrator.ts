@@ -5,6 +5,47 @@ import { fetchFilteredProducts } from '../shopee/service';
 import { generateCaption } from '../caption/generator';
 import { sendProductMessage } from '../whatsapp/sender';
 import { markProductSent } from '../storage/repository';
+import type { ShopeeProduct } from '../shopee/types';
+
+const MAX_RETRIES = 3;
+
+function normalizeProductName(name: string): string {
+  return name.toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+async function trySendProduct(product: ShopeeProduct): Promise<boolean> {
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      logger.info({ product: product.productName, attempt }, 'Processing product');
+
+      const caption = await generateCaption(product);
+      const sent = await sendProductMessage(product.imageUrl, caption);
+
+      if (sent) {
+        markProductSent({
+          item_id: product.itemId,
+          product_name: product.productName,
+          price_cents: product.priceCents,
+          discount_percent: product.discountPercent,
+          affiliate_link: product.affiliateLink,
+        });
+        logger.info({ product: product.productName }, 'Product sent and recorded');
+        return true;
+      }
+
+      logger.warn({ product: product.productName, attempt }, 'Send returned false, retrying');
+    } catch (error) {
+      logger.warn({ error, product: product.productName, attempt }, 'Failed to process product, retrying');
+    }
+
+    if (attempt < MAX_RETRIES) {
+      await randomDelay(2000, 4000);
+    }
+  }
+
+  logger.error({ product: product.productName }, 'Failed after all retries');
+  return false;
+}
 
 export async function runBatch(): Promise<void> {
   const batchSize = config.productsPerBatch;
@@ -24,35 +65,45 @@ export async function runBatch(): Promise<void> {
   }
 
   let sentCount = 0;
+  const sentNames = new Set<string>();
 
   for (const product of products) {
-    try {
-      logger.info({ product: product.productName }, 'Processing product');
+    sentNames.add(normalizeProductName(product.productName));
+  }
 
-      const caption = await generateCaption(product);
+  for (let i = 0; i < products.length; i++) {
+    const product = products[i];
+    const success = await trySendProduct(product);
 
-      const sent = await sendProductMessage(product.imageUrl, caption);
+    if (success) {
+      sentCount++;
+    } else {
+      // Failed after all retries — try to fetch a replacement
+      logger.info('Searching for replacement product');
+      try {
+        const replacements = await fetchFilteredProducts(1, sentNames);
+        if (replacements.length > 0) {
+          const replacement = replacements[0];
+          sentNames.add(normalizeProductName(replacement.productName));
+          logger.info({ product: replacement.productName }, 'Found replacement product');
 
-      if (sent) {
-        markProductSent({
-          item_id: product.itemId,
-          product_name: product.productName,
-          price_cents: product.priceCents,
-          discount_percent: product.discountPercent,
-          affiliate_link: product.affiliateLink,
-        });
-        sentCount++;
-        logger.info({ product: product.productName }, 'Product sent and recorded');
+          const replacementSuccess = await trySendProduct(replacement);
+          if (replacementSuccess) {
+            sentCount++;
+          }
+        } else {
+          logger.warn('No replacement product available');
+        }
+      } catch (error) {
+        logger.error({ error }, 'Failed to fetch replacement product');
       }
+    }
 
-      // Delay between messages to avoid WhatsApp ban
-      if (product !== products[products.length - 1]) {
-        await randomDelay(3000, 5000);
-      }
-    } catch (error) {
-      logger.error({ error, product: product.productName }, 'Failed to process product, continuing');
+    // Delay between messages to avoid WhatsApp ban
+    if (i < products.length - 1 || sentCount < batchSize) {
+      await randomDelay(3000, 5000);
     }
   }
 
-  logger.info({ sentCount, total: products.length }, 'Batch complete');
+  logger.info({ sentCount, total: batchSize }, 'Batch complete');
 }

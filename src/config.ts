@@ -31,6 +31,6 @@ export const config = {
     minSales: Number(optional('MIN_SALES', '100')),
     minRating: Number(optional('MIN_RATING', '4.6')),
   },
-  productsPerBatch: Number(optional('PRODUCTS_PER_BATCH', '5')),
+  productsPerBatch: Number(optional('PRODUCTS_PER_BATCH', '6')),
   logLevel: optional('LOG_LEVEL', 'info'),
 } as const;

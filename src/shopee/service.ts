@@ -35,8 +35,16 @@ function passesFilters(product: ShopeeProduct): boolean {
   return true;
 }
 
-export async function fetchFilteredProducts(count: number): Promise<ShopeeProduct[]> {
+function normalizeProductName(name: string): string {
+  return name.toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+export async function fetchFilteredProducts(
+  count: number,
+  excludeNames?: Set<string>,
+): Promise<ShopeeProduct[]> {
   const results: ShopeeProduct[] = [];
+  const seenNames = new Set<string>(excludeNames);
   let page = 1;
   const limit = 50;
   const maxPages = 5;
@@ -64,6 +72,13 @@ export async function fetchFilteredProducts(count: number): Promise<ShopeeProduc
         if (!passesFilters(product)) continue;
         if (wasProductSent(product.itemId)) continue;
 
+        const normalized = normalizeProductName(product.productName);
+        if (seenNames.has(normalized)) {
+          logger.debug({ product: product.productName }, 'Skipping duplicate product name in batch');
+          continue;
+        }
+
+        seenNames.add(normalized);
         results.push(product);
       }
 

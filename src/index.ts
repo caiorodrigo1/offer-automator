@@ -41,6 +41,7 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 main().catch((error) => {
-  logger.fatal({ error }, 'Fatal error');
+  logger.fatal({ err: error }, 'Fatal error');
+  console.error('Fatal error:', error);
   process.exit(1);
 });

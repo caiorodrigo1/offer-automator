@@ -16,8 +16,9 @@ export function getWhatsAppClient(): Client {
     });
 
     client.on('qr', (qr) => {
-      logger.info('QR code received, scan with WhatsApp:');
+      logger.info('QR code received, scan with WhatsApp (you have ~20s per QR):');
       qrcode.generate(qr, { small: true });
+      console.log('\n^^^ Scan this QR code with WhatsApp ^^^\n');
     });
 
     client.on('ready', () => {
@@ -31,6 +32,14 @@ export function getWhatsAppClient(): Client {
 
     client.on('auth_failure', (msg) => {
       logger.error({ msg }, 'WhatsApp authentication failed');
+    });
+
+    client.on('loading_screen', (percent, message) => {
+      logger.info({ percent, message }, 'WhatsApp loading screen');
+    });
+
+    (client as any).on('change_state', (state: string) => {
+      logger.info({ state }, 'WhatsApp state changed');
     });
 
     client.on('disconnected', (reason) => {
@@ -47,6 +56,30 @@ export function getWhatsAppClient(): Client {
   return client;
 }
 
+/**
+ * The 'ready' event fires before the WhatsApp Web store is fully injected, so
+ * the first getChats() calls fail with an obfuscated puppeteer error. Poll until
+ * a real store call succeeds.
+ */
+async function waitForStore(wpp: Client, timeoutMs = 120_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let attempt = 0;
+
+  while (Date.now() < deadline) {
+    attempt++;
+    try {
+      await wpp.getChats();
+      logger.info({ attempt }, 'WhatsApp store ready');
+      return;
+    } catch (error) {
+      logger.debug({ attempt, error }, 'Store not ready yet, waiting...');
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+
+  throw new Error('WhatsApp store never became usable (2min)');
+}
+
 export async function initWhatsApp(): Promise<Client> {
   const wpp = getWhatsAppClient();
   await wpp.initialize();
@@ -54,13 +87,15 @@ export async function initWhatsApp(): Promise<Client> {
   // Wait for ready state
   if (!isReady) {
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('WhatsApp init timeout (60s)')), 60_000);
+      const timeout = setTimeout(() => reject(new Error('WhatsApp init timeout (3min)')), 180_000);
       wpp.once('ready', () => {
         clearTimeout(timeout);
         resolve();
       });
     });
   }
+
+  await waitForStore(wpp);
 
   return wpp;
 }

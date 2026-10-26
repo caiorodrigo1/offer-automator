@@ -3,6 +3,10 @@ import { config } from '../config';
 
 export const logger = pino({
   level: config.logLevel,
+  serializers: {
+    error: pino.stdSerializers.err,
+    err: pino.stdSerializers.err,
+  },
   transport: {
     target: 'pino-pretty',
     options: {
